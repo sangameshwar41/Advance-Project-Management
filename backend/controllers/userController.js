@@ -117,8 +117,31 @@ async function loginUser(req, res) {
     }
 }
 
+// Get all registered users
+async function getUsers(req, res) {
+    try {
+        const users = await User.find()
+            .select("userName email role createdAt")
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            message: "Users retrieved successfully",
+            totalUsers: users.length,
+            users
+        });
+    }
+    catch (error) {
+        return res.status(500).json({
+            message: "Failed to retrieve users",
+            error: error.message
+        });
+    }
+}
+
+
 
 module.exports = {
     registerUser,
-    loginUser
+    loginUser,
+    getUsers
 };

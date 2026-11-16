@@ -1,19 +1,44 @@
-const express = require("express");
-const{registerValidation,
-    loginValidation,
-    checkValidation} =require("../validations/userValidation")
 
+const express = require("express");
 const router = express.Router();
 
 const {
     registerUser,
-    loginUser
+    loginUser,
+    getUsers
 } = require("../controllers/userController");
 
-// Register route
-router.post("/register",registerValidation,checkValidation,registerUser);
+const authMiddleware = require("../middleware/authMiddleware");
+const authorizeRoles = require("../middleware/roleMiddleware");
 
-// Login route
-router.post("/login",loginValidation,checkValidation, loginUser);
+const {
+    registerValidation,
+    loginValidation,
+    checkValidation
+} = require("../validations/userValidation");
+
+// Register
+router.post(
+    "/register",
+    registerValidation,
+    checkValidation,
+    registerUser
+);
+
+// Login
+router.post(
+    "/login",
+    loginValidation,
+    checkValidation,
+    loginUser
+);
+
+// Get all users - Admin and Project Manager only
+router.get(
+    "/",
+    authMiddleware,
+    authorizeRoles("Admin", "Project Manager"),
+    getUsers
+);
 
 module.exports = router;

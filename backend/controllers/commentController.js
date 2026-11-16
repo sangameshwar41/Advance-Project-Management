@@ -1,6 +1,59 @@
 
 const Comment = require("../models/comment");
 const Task = require("../models/task");
+const Project = require("../models/project");
+const createActivityLog = require("../services/activityLogService");
+
+// Check whether the user can access the task
+async function checkTaskAccess(taskId, user) {
+    const task = await Task.findById(taskId);
+
+    if (!task) {
+        return {
+            status: 404,
+            message: "Task not found"
+        };
+    }
+
+    // Admin can access all tasks
+    if (user.role === "Admin") {
+        return { task };
+    }
+
+    // Project Manager can access tasks in projects they created
+    if (user.role === "Project Manager") {
+        const project = await Project.findOne({
+            _id: task.project,
+            createdBy: user.userId
+        });
+
+        if (!project) {
+            return {
+                status: 403,
+                message: "You do not have permission to access this task"
+            };
+        }
+
+        return { task };
+    }
+
+    // Team Member can access only assigned tasks
+    if (user.role === "Team Member") {
+        if (task.assignedTo.toString() !== user.userId) {
+            return {
+                status: 403,
+                message: "You do not have permission to access this task"
+            };
+        }
+
+        return { task };
+    }
+
+    return {
+        status: 403,
+        message: "You do not have permission to access this task"
+    };
+}
 
 // Add a comment to a task
 async function addComment(req, res) {
@@ -8,20 +61,28 @@ async function addComment(req, res) {
         const { content } = req.body;
         const { taskId } = req.params;
 
-        // Check whether the task exists
-        const existingTask = await Task.findById(taskId);
+        const access = await checkTaskAccess(taskId, req.user);
 
-        if (!existingTask) {
-            return res.status(404).json({
-                message: "Task not found"
+        if (!access.task) {
+            return res.status(access.status).json({
+                message: access.message
             });
         }
 
-        // Create a comment
+        const existingTask = access.task;
+
         const comment = await Comment.create({
             task: taskId,
             user: req.user.userId,
             content
+        });
+
+        await createActivityLog({
+            user: req.user.userId,
+            action: "Comment Added",
+            project: existingTask.project,
+            task: existingTask._id,
+            details: "Added a comment to task: " + existingTask.title
         });
 
         return res.status(201).json({
@@ -42,16 +103,14 @@ async function getTaskComments(req, res) {
     try {
         const { taskId } = req.params;
 
-        // Check whether the task exists
-        const existingTask = await Task.findById(taskId);
+        const access = await checkTaskAccess(taskId, req.user);
 
-        if (!existingTask) {
-            return res.status(404).json({
-                message: "Task not found"
+        if (!access.task) {
+            return res.status(access.status).json({
+                message: access.message
             });
         }
 
-        // Retrieve comments
         const comments = await Comment.find({ task: taskId })
             .populate("user", "userName email")
             .sort({ createdAt: 1 });

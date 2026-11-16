@@ -2,6 +2,7 @@
 const Task = require("../models/task");
 const Project = require("../models/project");
 const User = require("../models/user");
+const createActivityLog = require("../services/activityLogService");
 
 // Create a new task
 async function createTask(req, res) {
@@ -16,7 +17,6 @@ async function createTask(req, res) {
             dueDate
         } = req.body;
 
-        // Check whether the project exists
         const existingProject = await Project.findById(project);
 
         if (!existingProject) {
@@ -25,7 +25,16 @@ async function createTask(req, res) {
             });
         }
 
-        // Check whether the assigned user exists
+        // Project Managers can create tasks only in their own projects
+        if (
+            req.user.role === "Project Manager" &&
+            existingProject.createdBy.toString() !== req.user.userId
+        ) {
+            return res.status(403).json({
+                message: "You cannot create tasks in another manager's project"
+            });
+        }
+
         const existingUser = await User.findById(assignedTo);
 
         if (!existingUser) {
@@ -34,7 +43,6 @@ async function createTask(req, res) {
             });
         }
 
-        // Check whether the assigned user is a project member
         if (!existingProject.members.some(
             member => member.toString() === assignedTo
         )) {
@@ -43,7 +51,6 @@ async function createTask(req, res) {
             });
         }
 
-        // Create a new task
         const task = await Task.create({
             title,
             description,
@@ -53,6 +60,14 @@ async function createTask(req, res) {
             status,
             dueDate,
             createdBy: req.user.userId
+        });
+
+        await createActivityLog({
+            user: req.user.userId,
+            action: "Task Created",
+            project: task.project,
+            task: task._id,
+            details: "Created task: " + task.title
         });
 
         return res.status(201).json({
@@ -71,18 +86,78 @@ async function createTask(req, res) {
 // Get all tasks
 async function getTasks(req, res) {
     try {
-        const page = Number(req.query.page) || 1;
-        const limit = Number(req.query.limit) || 10;
+        const page = Math.max(Number(req.query.page) || 1, 1);
+        const limit = Math.min(
+            Math.max(Number(req.query.limit) || 10, 1),
+            50
+        );
 
-        const tasks = await Task.find()
+        const {
+            search,
+            status,
+            priority,
+            project,
+            sortBy,
+            sortOrder
+        } = req.query;
+
+        const filter = {};
+
+        if (req.user.role === "Team Member") {
+            filter.assignedTo = req.user.userId;
+        }
+        else if (req.user.role === "Project Manager") {
+            const projects = await Project.find({
+                createdBy: req.user.userId
+            }).select("_id");
+
+            filter.project = {
+                $in: projects.map(item => item._id)
+            };
+        }
+
+        if (search) {
+            const escapedSearch = search.replace(
+                /[.*+?^${}()|[\]\\]/g,
+                "\\$&"
+            );
+
+            filter.title = {
+                $regex: escapedSearch,
+                $options: "i"
+            };
+        }
+
+        if (status) filter.status = status;
+        if (priority) filter.priority = priority;
+
+        if (project) {
+            filter.project = project;
+        }
+
+        const allowedSortFields = [
+            "title",
+            "dueDate",
+            "createdAt",
+            "priority",
+            "status"
+        ];
+
+        const sortField = allowedSortFields.includes(sortBy)
+            ? sortBy
+            : "createdAt";
+
+        const sortDirection = sortOrder === "asc" ? 1 : -1;
+
+        const tasks = await Task.find(filter)
             .populate("project", "name")
             .populate("assignedTo", "userName email")
             .populate("createdBy", "userName email")
-            .sort({ createdAt: -1 })
+            .sort({ [sortField]: sortDirection })
             .skip((page - 1) * limit)
             .limit(limit);
 
-        const totalTasks = await Task.countDocuments();
+        const totalTasks = await Task.countDocuments(filter);
 
         return res.status(200).json({
             message: "Tasks retrieved successfully",
@@ -105,7 +180,24 @@ async function getTasks(req, res) {
 // Get a single task
 async function getTaskById(req, res) {
     try {
-        const task = await Task.findById(req.params.id)
+        const filter = {
+            _id: req.params.id
+        };
+
+        if (req.user.role === "Team Member") {
+            filter.assignedTo = req.user.userId;
+        }
+        else if (req.user.role === "Project Manager") {
+            const projects = await Project.find({
+                createdBy: req.user.userId
+            }).select("_id");
+
+            filter.project = {
+                $in: projects.map(item => item._id)
+            };
+        }
+
+        const task = await Task.findOne(filter)
             .populate("project", "name")
             .populate("assignedTo", "userName email")
             .populate("createdBy", "userName email");
@@ -141,6 +233,54 @@ async function updateTask(req, res) {
             dueDate
         } = req.body;
 
+        const existingTask = await Task.findById(req.params.id);
+
+        if (!existingTask) {
+            return res.status(404).json({
+                message: "Task not found"
+            });
+        }
+
+        const newProjectId = project || existingTask.project.toString();
+        const newAssignedTo = assignedTo || existingTask.assignedTo.toString();
+
+        const existingProject = await Project.findById(newProjectId);
+
+        if (!existingProject) {
+            return res.status(404).json({
+                message: "Project not found"
+            });
+        }
+
+        // Project Managers can update only tasks in their own projects
+        if (
+            req.user.role === "Project Manager" &&
+            (
+                existingTask.project.toString() !== newProjectId ||
+                existingProject.createdBy.toString() !== req.user.userId
+            )
+        ) {
+            return res.status(403).json({
+                message: "You cannot update tasks outside your own projects"
+            });
+        }
+
+        const existingUser = await User.findById(newAssignedTo);
+
+        if (!existingUser) {
+            return res.status(404).json({
+                message: "Assigned user not found"
+            });
+        }
+
+        if (!existingProject.members.some(
+            member => member.toString() === newAssignedTo
+        )) {
+            return res.status(400).json({
+                message: "Assigned user is not a member of this project"
+            });
+        }
+
         const updateData = {};
 
         if (title !== undefined) updateData.title = title;
@@ -160,11 +300,13 @@ async function updateTask(req, res) {
             }
         );
 
-        if (!task) {
-            return res.status(404).json({
-                message: "Task not found"
-            });
-        }
+        await createActivityLog({
+            user: req.user.userId,
+            action: "Task Updated",
+            project: task.project,
+            task: task._id,
+            details: "Updated task: " + task.title
+        });
 
         return res.status(200).json({
             message: "Task updated successfully",
@@ -182,13 +324,35 @@ async function updateTask(req, res) {
 // Delete a task
 async function deleteTask(req, res) {
     try {
-        const task = await Task.findByIdAndDelete(req.params.id);
+        const filter = {
+            _id: req.params.id
+        };
+
+        if (req.user.role === "Project Manager") {
+            const projects = await Project.find({
+                createdBy: req.user.userId
+            }).select("_id");
+
+            filter.project = {
+                $in: projects.map(item => item._id)
+            };
+        }
+
+        const task = await Task.findOneAndDelete(filter);
 
         if (!task) {
             return res.status(404).json({
                 message: "Task not found"
             });
         }
+
+        await createActivityLog({
+            user: req.user.userId,
+            action: "Task Deleted",
+            project: task.project,
+            task: task._id,
+            details: "Deleted task: " + task.title
+        });
 
         return res.status(200).json({
             message: "Task deleted successfully"

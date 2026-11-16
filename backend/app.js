@@ -7,6 +7,8 @@ const authMiddleware = require("./middleware/authMiddleware");
 const projectRoutes = require("./routes/projectRouter");
 const taskRoutes = require("./routes/taskRouter");
 const commentRoutes = require("./routes/commentRouter");
+const activityLogRoutes = require("./routes/activityLogRouter");
+const dashboardRoutes = require("./routes/dashboardRouter");
 
 const app = express();
 
@@ -22,6 +24,8 @@ app.use("/api/users", userRoutes);
 app.use("/api/projects",projectRoutes)
 app.use("/api/task",taskRoutes)
 app.use("/api/tasks", commentRoutes);
+app.use("/api/activity-logs", activityLogRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 
 

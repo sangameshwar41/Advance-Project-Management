@@ -7,6 +7,7 @@ function errorHandler(error, req, res, next) {
     return res.status(statusCode).json({
         message: error.message || "Internal Server Error"
     });
+    
 }
 
 module.exports = errorHandler;
